@@ -97,7 +97,7 @@ function App() {
         <div className="text-center">
           <p className="text-sm font-medium text-[#7a1226]">Winning Scoreboard</p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">代理活动量管理计分板</h1>
-          <p className="mt-3 text-sm leading-6 text-muted-foreground">选择自己的名字并输入 8 位访问码。代理只能看到自己的数据，AD Serene 可以查看全部代理。</p>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">选择自己的名字并输入 6 位访问码。代理只能看到自己的数据，AD Serene 可以查看全部代理。</p>
         </div>
         <div className="mt-7 grid gap-4">
           <div>
@@ -112,18 +112,18 @@ function App() {
             </select>
           </div>
           <div>
-            <label className="mb-2 block text-sm font-medium" htmlFor="access-code">8 位访问码</label>
+            <label className="mb-2 block text-sm font-medium" htmlFor="access-code">6 位访问码</label>
             <Input
               id="access-code"
               type="password"
               inputMode="numeric"
               pattern="[0-9]*"
-              maxLength={8}
+              maxLength={6}
               autoComplete="current-password"
               value={accessCode}
-              onChange={(event) => setAccessCode(event.target.value.replace(/\D/g, '').slice(0, 8))}
+              onChange={(event) => setAccessCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && agentId && accessCode.length === 8) void submitLogin();
+                if (event.key === 'Enter' && agentId && accessCode.length === 6) void submitLogin();
               }}
               placeholder="请输入访问码"
             />
@@ -132,7 +132,7 @@ function App() {
           {!agents.length && <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">访问码正在配置，请稍后刷新。</p>}
           <Button
             className="h-11 w-full bg-[#7a1226] hover:bg-[#64101f]"
-            disabled={submitting || !agentId || accessCode.length !== 8}
+            disabled={submitting || !agentId || accessCode.length !== 6}
             onClick={() => void submitLogin()}
           >
             {submitting ? '登录中…' : '进入计分板'}

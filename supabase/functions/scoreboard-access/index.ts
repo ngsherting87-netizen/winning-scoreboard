@@ -19,11 +19,7 @@ function json(request: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders(request) });
 }
 
-function randomAccessCode() {
-  const values = new Uint32Array(1);
-  crypto.getRandomValues(values);
-  return String(10_000_000 + (values[0] % 90_000_000));
-}
+const defaultAccessCode = '123456';
 
 function randomSalt() {
   const values = new Uint8Array(18);
@@ -120,7 +116,7 @@ async function clearFailedLogins(admin: ReturnType<typeof createClient>, userId:
 }
 
 async function setCredential(admin: ReturnType<typeof createClient>, agentId: number) {
-  const accessCode = randomAccessCode();
+  const accessCode = defaultAccessCode;
   const salt = randomSalt();
   const iterations = 120_000;
   const codeHash = await hashAccessCode(salt, accessCode, iterations);
@@ -165,7 +161,7 @@ Deno.serve(async (request) => {
     if (action === 'login') {
       const agentId = numberValue(body.agentId);
       const accessCode = textValue(body.accessCode).trim();
-      if (!Number.isInteger(agentId) || !/^\d{8}$/.test(accessCode)) {
+      if (!Number.isInteger(agentId) || !/^\d{6}$/.test(accessCode)) {
         return json(request, { error: '姓名或访问码不正确' }, 400);
       }
       stage = 'rate-limit';
