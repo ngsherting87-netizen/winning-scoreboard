@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
 import {
   BarChart3,
   CalendarDays,
@@ -13,11 +14,9 @@ import {
   Pencil,
   Plus,
   Save,
-  Settings2,
   Sparkles,
   Target,
   TrendingUp,
-  UserCheck,
   Users,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
@@ -35,6 +34,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { addDays } from '@/lib/scoreboard-domain';
 import type { AgentSummary, DashboardData, WeeklyReview } from '@/lib/scoreboard-types';
+import {
+  loadDashboard as loadSupabaseDashboard,
+  saveAgent as saveSupabaseAgent,
+  saveDailyActivity,
+  saveWeeklyReview,
+} from '@/src/supabase-scoreboard';
 
 type View = 'daily' | 'weekly' | 'admin' | 'agents';
 
@@ -59,13 +64,7 @@ function levelMeta(level: 'strong' | 'improve' | 'action') {
   return { label: '需要行动', emoji: '🔴', className: 'bg-rose-50 text-rose-700 ring-rose-100' };
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
-  const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? '操作失败');
-  return body;
-}
-
-export function DashboardApp({ signOutPath }: { signOutPath: string }) {
+export function DashboardApp({ viewer, onSignOut }: { viewer: User; onSignOut: () => void }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [view, setView] = useState<View | null>(null);
   const [completed, setCompleted] = useState<Set<number>>(new Set());
@@ -78,9 +77,7 @@ export function DashboardApp({ signOutPath }: { signOutPath: string }) {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ date });
-      if (agentId) params.set('agentId', String(agentId));
-      const next = await parseResponse<DashboardData>(await fetch(`/api/dashboard?${params}`, { cache: 'no-store' }));
+      const next = await loadSupabaseDashboard(viewer, date, agentId);
       setData(next);
       setCompleted(new Set(next.completedActionIds));
     } catch (loadError) {
@@ -103,11 +100,8 @@ export function DashboardApp({ signOutPath }: { signOutPath: string }) {
     setSaving(true);
     setError(null);
     try {
-      await parseResponse(await fetch('/api/activity', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ date: data.selectedDate, agentId: data.selectedAgent.id, completedActionIds: [...completed] }),
-      }));
+      if (!data.profile) throw new Error('请先选择代理身份');
+      await saveDailyActivity(viewer, data.profile, data.selectedDate, data.selectedAgent.id, [...completed]);
       setNotice('今日行动已保存');
       await loadDashboard(data.selectedDate, data.selectedAgent.id);
       window.setTimeout(() => setNotice(null), 2200);
@@ -118,31 +112,13 @@ export function DashboardApp({ signOutPath }: { signOutPath: string }) {
     }
   }
 
-  async function claimAgent(agentId: number) {
-    setSaving(true);
-    setError(null);
-    try {
-      await parseResponse(await fetch('/api/profile/claim', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agentId }),
-      }));
-      await loadDashboard(localDateString(), agentId);
-      setView('daily');
-    } catch (claimError) {
-      setError(claimError instanceof Error ? claimError.message : '无法绑定身份');
-    } finally {
-      setSaving(false);
-    }
-  }
-
   if (loading && !data) return <LoadingScreen />;
   if (!data) return <ErrorScreen message={error ?? '无法读取计分板'} onRetry={() => void loadDashboard()} />;
-  if (data.status === 'onboarding') return <Onboarding data={data} error={error} saving={saving} onClaim={claimAgent} signOutPath={signOutPath} />;
+  if (data.status === 'onboarding') return <ErrorScreen message="访问权限尚未生效，请退出后重新输入访问码。" onRetry={onSignOut} />;
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader data={data} view={activeView} onView={setView} signOutPath={signOutPath} />
+      <AppHeader data={data} view={activeView} onView={setView} onSignOut={onSignOut} />
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-7 lg:px-10 lg:py-8">
         {(error || notice) && (
           <div className={`mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-sm ring-1 ${error ? 'bg-rose-50 text-rose-700 ring-rose-100' : 'bg-emerald-50 text-emerald-700 ring-emerald-100'}`}>
@@ -166,6 +142,7 @@ export function DashboardApp({ signOutPath }: { signOutPath: string }) {
         )}
         {activeView === 'weekly' && (
           <WeeklyView
+            viewer={viewer}
             data={data}
             saving={saving}
             onDate={(date) => void loadDashboard(date, data.selectedAgent?.id ?? null)}
@@ -191,6 +168,7 @@ export function DashboardApp({ signOutPath }: { signOutPath: string }) {
         )}
         {activeView === 'agents' && data.profile?.role === 'admin' && (
           <AgentsView
+            viewer={viewer}
             data={data}
             onReload={() => void loadDashboard(data.selectedDate, data.selectedAgent?.id ?? null)}
             onError={setError}
@@ -202,7 +180,7 @@ export function DashboardApp({ signOutPath }: { signOutPath: string }) {
   );
 }
 
-function AppHeader({ data, view, onView, signOutPath }: { data: DashboardData; view: View; onView: (view: View) => void; signOutPath: string }) {
+function AppHeader({ data, view, onView, onSignOut }: { data: DashboardData; view: View; onView: (view: View) => void; onSignOut: () => void }) {
   const isAdmin = data.profile?.role === 'admin';
   const nav = isAdmin
     ? [{ id: 'admin' as const, label: '管理员总览', icon: LayoutDashboard }, { id: 'daily' as const, label: '代理行动', icon: CheckCircle2 }, { id: 'weekly' as const, label: '每周成绩', icon: BarChart3 }, { id: 'agents' as const, label: '代理设置', icon: Users }]
@@ -222,7 +200,7 @@ function AppHeader({ data, view, onView, signOutPath }: { data: DashboardData; v
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block"><p className="text-sm font-medium">{data.profile?.name}</p><p className="max-w-40 truncate text-xs text-white/60">{data.viewer.email}</p></div>
           <div className="grid size-9 place-items-center rounded-full bg-[#f1dca6] font-semibold text-[#7a1226]">{data.profile?.name.slice(-1)}</div>
-          <a href={signOutPath} target="_top" className="grid size-8 place-items-center rounded-lg text-white/70 transition hover:bg-white/10 hover:text-white" aria-label="退出"><LogOut className="size-4" /></a>
+          <button type="button" onClick={onSignOut} className="grid size-8 place-items-center rounded-lg text-white/70 transition hover:bg-white/10 hover:text-white" aria-label="退出"><LogOut className="size-4" /></button>
         </div>
       </div>
       <nav className="mx-auto flex max-w-[1440px] gap-1 overflow-x-auto px-4 pb-3 lg:hidden" aria-label="移动页面">
@@ -234,13 +212,13 @@ function AppHeader({ data, view, onView, signOutPath }: { data: DashboardData; v
   );
 }
 
-function AgentAndDateControls({ data, onDate, onAgent, weekMode = false }: { data: DashboardData; onDate: (date: string) => void; onAgent: (id: number) => void; weekMode?: boolean }) {
+function AgentAndDateControls({ data, onDate, onAgent, weekMode = false, showAgent = true }: { data: DashboardData; onDate: (date: string) => void; onAgent: (id: number) => void; weekMode?: boolean; showAgent?: boolean }) {
   const activeAgents = data.agents.filter((agent) => agent.active);
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {data.profile?.role === 'admin' && data.selectedAgent && (
+      {showAgent && data.profile?.role === 'admin' && data.selectedAgent && (
         <Select value={String(data.selectedAgent.id)} onValueChange={(value) => onAgent(Number(value))}>
-          <SelectTrigger className="min-w-36 bg-card"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="min-w-36 bg-card"><SelectValue>{data.selectedAgent.name}</SelectValue></SelectTrigger>
           <SelectContent>{activeAgents.map((agent) => <SelectItem key={agent.id} value={String(agent.id)}>{agent.name}</SelectItem>)}</SelectContent>
         </Select>
       )}
@@ -283,7 +261,7 @@ function DailyView({ data, completed, saving, onToggle, onSave, onDate, onAgent 
   );
 }
 
-function WeeklyView({ data, saving, onDate, onAgent, onSaved, onError, setSaving }: { data: DashboardData; saving: boolean; onDate: (date: string) => void; onAgent: (id: number) => void; onSaved: () => Promise<void>; onError: (message: string | null) => void; setSaving: (value: boolean) => void }) {
+function WeeklyView({ viewer, data, saving, onDate, onAgent, onSaved, onError, setSaving }: { viewer: User; data: DashboardData; saving: boolean; onDate: (date: string) => void; onAgent: (id: number) => void; onSaved: () => Promise<void>; onError: (message: string | null) => void; setSaving: (value: boolean) => void }) {
   const [review, setReview] = useState<WeeklyReview>(data.review);
   useEffect(() => setReview(data.review), [data.review]);
   const meta = levelMeta(data.level);
@@ -291,7 +269,8 @@ function WeeklyView({ data, saving, onDate, onAgent, onSaved, onError, setSaving
     if (!data.selectedAgent) return;
     setSaving(true); onError(null);
     try {
-      await parseResponse(await fetch('/api/review', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ date: data.selectedDate, agentId: data.selectedAgent.id, review }) }));
+      if (!data.profile) throw new Error('请先选择代理身份');
+      await saveWeeklyReview(viewer, data.profile, data.selectedDate, data.selectedAgent.id, review);
       await onSaved();
     } catch (saveError) { onError(saveError instanceof Error ? saveError.message : '无法保存复盘'); }
     finally { setSaving(false); }
@@ -319,7 +298,7 @@ function AdminView({ data, onWeek, onOpenAgent }: { data: DashboardData; onWeek:
   const chartData = ranked.map((agent) => ({ name: agent.name, score: agent.weeklyScore }));
   return (
     <>
-      <section className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="mb-2 text-sm text-muted-foreground">AD Serene 专属页面</p><h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">全部代理活动总览</h1><p className="mt-1 text-sm text-muted-foreground">查看每位代理的每日得分、周总分、执行率与排名。</p></div><AgentAndDateControls data={data} onDate={onWeek} onAgent={() => undefined} weekMode /></section>
+      <section className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="mb-2 text-sm text-muted-foreground">AD Serene 专属页面</p><h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">全部代理活动总览</h1><p className="mt-1 text-sm text-muted-foreground">查看每位代理的每日得分、周总分、执行率与排名。</p></div><AgentAndDateControls data={data} onDate={onWeek} onAgent={() => undefined} weekMode showAgent={false} /></section>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Kpi label="团队周总分" value={`${teamScore}`} helper={`最高 ${activeAgents.length * data.maximum} 分`} /><Kpi label="启用代理" value={`${activeAgents.length}`} helper="Active agents" /><Kpi label="平均执行率" value={`${Math.round(average * 100)}%`} helper="Team execution" /><Kpi label="本周第一名" value={top} helper={ranked[0]?.weeklyScore ? `${ranked[0].weeklyScore} 分` : '尚无记录'} /></div>
       <div className="mt-6 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Card><CardHeader><CardTitle>代理每周排名</CardTitle><CardDescription>点击代理姓名可打开该代理的每日行动。</CardDescription></CardHeader><CardContent className="px-0"><Table><TableHeader><TableRow><TableHead className="pl-4">排名</TableHead><TableHead>代理</TableHead>{weekLabels.map((day) => <TableHead key={day} className="text-center">{day}</TableHead>)}<TableHead className="text-right">周分数</TableHead><TableHead className="text-right pr-4">执行率</TableHead></TableRow></TableHeader><TableBody>{ranked.map((agent, index) => { const meta = levelMeta(agent.level); return <TableRow key={agent.id}><TableCell className="pl-4 font-semibold">{agent.weeklyScore ? index + 1 : '—'}</TableCell><TableCell><button className="font-medium text-primary hover:underline" onClick={() => onOpenAgent(agent)}>{agent.name}</button></TableCell>{agent.dailyScores.map((score, day) => <TableCell key={day} className="text-center tabular-nums">{score}</TableCell>)}<TableCell className="text-right font-semibold">{agent.weeklyScore}</TableCell><TableCell className="pr-4 text-right"><Badge variant="outline" className={meta.className}>{Math.round(agent.execution * 100)}%</Badge></TableCell></TableRow>; })}</TableBody></Table></CardContent></Card>
@@ -329,7 +308,7 @@ function AdminView({ data, onWeek, onOpenAgent }: { data: DashboardData; onWeek:
   );
 }
 
-function AgentsView({ data, onReload, onError, onNotice }: { data: DashboardData; onReload: () => void; onError: (message: string | null) => void; onNotice: (message: string | null) => void }) {
+function AgentsView({ viewer: _viewer, data, onReload, onError, onNotice }: { viewer: User; data: DashboardData; onReload: () => void; onError: (message: string | null) => void; onNotice: (message: string | null) => void }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AgentSummary | null>(null);
   const [name, setName] = useState('');
@@ -342,26 +321,29 @@ function AgentsView({ data, onReload, onError, onNotice }: { data: DashboardData
   async function submit() {
     setSaving(true); onError(null);
     try {
-      await parseResponse(await fetch('/api/admin/agents', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(editing ? { operation: 'update', id: editing.id, name, active, clearBinding } : { operation: 'create', name }) }));
-      setDialogOpen(false); onNotice(editing ? '代理资料已更新' : '新代理已添加'); onReload(); window.setTimeout(() => onNotice(null), 2200);
+      if (!data.profile) throw new Error('请先登录管理员账号');
+      const result = await saveSupabaseAgent(data.profile, editing
+        ? { operation: 'update', id: editing.id, name, active, clearBinding }
+        : { operation: 'create', name });
+      setDialogOpen(false);
+      const baseNotice = editing ? '代理资料已更新' : '新代理已添加';
+      onNotice(result.accessCode ? `${baseNotice}，新访问码：${result.accessCode}（请立即记录）` : baseNotice);
+      onReload();
+      if (!result.accessCode) window.setTimeout(() => onNotice(null), 2200);
     } catch (saveError) { onError(saveError instanceof Error ? saveError.message : '无法更新代理'); }
     finally { setSaving(false); }
   }
   return (
     <>
       <section className="mb-6 flex items-end justify-between gap-4"><div><p className="mb-2 text-sm text-muted-foreground">AD Serene 专属设置</p><h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">代理账号管理</h1><p className="mt-1 text-sm text-muted-foreground">添加、改名、停用或解除账号绑定。</p></div><Button onClick={openNew} className="bg-[#7a1226] hover:bg-[#64101f]"><Plus />添加代理</Button></section>
-      <Card><CardHeader><CardTitle>代理名单</CardTitle><CardDescription>代理登录后会从尚未绑定的名单中选择自己的身份。</CardDescription></CardHeader><CardContent className="px-0"><Table><TableHeader><TableRow><TableHead className="pl-4">编号</TableHead><TableHead>代理姓名</TableHead><TableHead>账号状态</TableHead><TableHead>登录邮箱</TableHead><TableHead className="pr-4 text-right">操作</TableHead></TableRow></TableHeader><TableBody>{data.agents.map((agent) => <TableRow key={agent.id} className={!agent.active ? 'opacity-55' : ''}><TableCell className="pl-4 font-mono text-xs">{agent.code}</TableCell><TableCell className="font-medium">{agent.name}</TableCell><TableCell><Badge variant="outline" className={agent.claimed ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}>{agent.claimed ? '已绑定' : '等待认领'}</Badge>{!agent.active && <Badge variant="outline" className="ml-2">已停用</Badge>}</TableCell><TableCell className="text-muted-foreground">{agent.email ?? '—'}</TableCell><TableCell className="pr-4 text-right"><Button variant="ghost" size="sm" onClick={() => openEdit(agent)}><Pencil />编辑</Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}><DialogContent><DialogHeader><DialogTitle>{editing ? '编辑代理' : '添加代理'}</DialogTitle><DialogDescription>{editing ? '改名不会删除历史分数。解除绑定后，代理需要重新认领身份。' : '新增代理会自动获得下一个代理编号。'}</DialogDescription></DialogHeader><div><label className="mb-2 block text-sm font-medium">代理姓名</label><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：代理 D" autoFocus /></div>{editing && <><label className="flex items-center gap-3 rounded-xl border p-3"><Checkbox checked={active} onCheckedChange={(checked) => setActive(Boolean(checked))} /><span><span className="block text-sm font-medium">启用代理</span><span className="text-xs text-muted-foreground">停用后不再出现在填写与排名中</span></span></label>{editing.claimed && <label className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3"><Checkbox checked={clearBinding} onCheckedChange={(checked) => setClearBinding(Boolean(checked))} /><span><span className="block text-sm font-medium text-amber-900">解除登录绑定</span><span className="text-xs text-amber-700">只解除账号，不删除历史活动</span></span></label>}</>}<DialogFooter><Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button><Button disabled={saving || !name.trim()} onClick={submit} className="bg-[#7a1226] hover:bg-[#64101f]">{saving ? '保存中…' : '保存'}</Button></DialogFooter></DialogContent></Dialog>
+      <Card><CardHeader><CardTitle>代理名单</CardTitle><CardDescription>每位代理使用自己的 8 位访问码登录；访问码不会存放在公开代码。</CardDescription></CardHeader><CardContent className="px-0"><Table><TableHeader><TableRow><TableHead className="pl-4">编号</TableHead><TableHead>代理姓名</TableHead><TableHead>账号状态</TableHead><TableHead>访问方式</TableHead><TableHead className="pr-4 text-right">操作</TableHead></TableRow></TableHeader><TableBody>{data.agents.map((agent) => <TableRow key={agent.id} className={!agent.active ? 'opacity-55' : ''}><TableCell className="pl-4 font-mono text-xs">{agent.code}</TableCell><TableCell className="font-medium">{agent.name}</TableCell><TableCell><Badge variant="outline" className={agent.claimed ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}>{agent.claimed ? '访问码已设置' : '尚未设置'}</Badge>{!agent.active && <Badge variant="outline" className="ml-2">已停用</Badge>}</TableCell><TableCell className="text-muted-foreground">独立访问码</TableCell><TableCell className="pr-4 text-right"><Button variant="ghost" size="sm" onClick={() => openEdit(agent)}><Pencil />编辑</Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}><DialogContent><DialogHeader><DialogTitle>{editing ? '编辑代理' : '添加代理'}</DialogTitle><DialogDescription>{editing ? '改名和重设访问码都不会删除历史分数。' : '新增代理会自动获得编号与新的 8 位访问码。'}</DialogDescription></DialogHeader><div><label className="mb-2 block text-sm font-medium">代理姓名</label><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：代理 D" /></div>{editing && <><label className="flex items-center gap-3 rounded-xl border p-3"><Checkbox checked={active} onCheckedChange={(checked) => setActive(Boolean(checked))} /><span><span className="block text-sm font-medium">启用代理</span><span className="text-xs text-muted-foreground">停用后不再出现在填写与排名中</span></span></label>{editing.claimed && <label className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3"><Checkbox checked={clearBinding} onCheckedChange={(checked) => setClearBinding(Boolean(checked))} /><span><span className="block text-sm font-medium text-amber-900">重设访问码</span><span className="text-xs text-amber-700">旧访问码会立即失效，保存后显示新访问码</span></span></label>}</>}<DialogFooter><Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button><Button disabled={saving || !name.trim()} onClick={submit} className="bg-[#7a1226] hover:bg-[#64101f]">{saving ? '保存中…' : '保存'}</Button></DialogFooter></DialogContent></Dialog>
     </>
   );
 }
 
 function Kpi({ label, value, helper }: { label: string; value: string; helper: string }) {
   return <Card><CardHeader><CardDescription>{label}</CardDescription><CardTitle className="text-3xl font-semibold tracking-tight text-[#7a1226]">{value}</CardTitle></CardHeader><CardContent><p className="text-xs text-muted-foreground">{helper}</p></CardContent></Card>;
-}
-
-function Onboarding({ data, error, saving, onClaim, signOutPath }: { data: DashboardData; error: string | null; saving: boolean; onClaim: (id: number) => void; signOutPath: string }) {
-  return <main className="min-h-screen bg-[#f8f3ed] px-4 py-10"><div className="mx-auto max-w-3xl"><div className="mb-8 flex items-center justify-between"><div className="flex items-center gap-3"><div className="grid size-11 place-items-center rounded-xl bg-[#7a1226] text-white"><Sparkles /></div><div><p className="font-semibold">Winning Scoreboard</p><p className="text-xs text-muted-foreground">代理身份设置</p></div></div><a href={signOutPath} target="_top" className="text-sm text-muted-foreground hover:text-foreground">切换登录账号</a></div><Card className="p-2"><CardHeader><div className="mb-3 grid size-12 place-items-center rounded-2xl bg-[#f7ead0] text-[#9b6414]"><UserCheck /></div><CardTitle className="text-2xl">欢迎，{data.viewer.displayName}</CardTitle><CardDescription>第一次进入，请选择你的代理身份。绑定后只能查看和填写自己的活动资料。</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-2">{data.unclaimedAgents.map((agent) => <button key={agent.id} disabled={saving} onClick={() => onClaim(agent.id)} className="flex items-center justify-between rounded-xl border bg-white p-4 text-left transition hover:border-[#7a1226]/40 hover:bg-[#fffaf0] disabled:opacity-50"><span><span className="block font-medium">{agent.name}</span><span className="text-xs text-muted-foreground">{agent.code}</span></span><ChevronRight className="size-4 text-muted-foreground" /></button>)}</div>{!data.unclaimedAgents.length && <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">目前没有可认领的代理身份，请联系 AD Serene 添加代理或解除旧绑定。</div>}{error && <div className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}<p className="mt-5 text-xs text-muted-foreground">请选择正确姓名。若选错，需要由 AD Serene 在代理设置中解除绑定。</p></CardContent></Card></div></main>;
 }
 
 function LoadingScreen() {

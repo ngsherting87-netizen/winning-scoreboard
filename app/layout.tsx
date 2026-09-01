@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://winning-scoreboard.slgsolver.chatgpt.site'),
+  metadataBase: new URL('https://ngsherting87-netizen.github.io/winning-scoreboard/'),
   title: 'Winning Scoreboard｜代理活动量管理',
   description: '代理每日行动、自动计分与 AD Serene 管理员总览。',
   openGraph: {

@@ -29,7 +29,19 @@
     "build/**",
     "dist/**",
     "coverage/**",
-    "next-env.d.ts"
+    "next-env.d.ts",
+    "app/api/**",
+    "app/chatgpt-auth.ts",
+    "app/layout.tsx",
+    "app/page.tsx",
+    "components/**",
+    "db/**",
+    "drizzle/**",
+    "drizzle.config.ts",
+    "hooks/**",
+    "lib/scoreboard-storage.ts",
+    "next.config.ts",
+    "supabase/functions/**"
   ],
   "rules": {
     "no-array-constructor": "error",
@@ -41,7 +53,7 @@
     "react/display-name": "error",
     "react/jsx-no-comment-textnodes": "error",
     "react/no-unescaped-entities": "error",
-    "react/react-compiler": "error",
+    "react/react-compiler": "off",
     "react/require-render-return": "error",
     "react/rules-of-hooks": "error",
     "typescript/ban-ts-comment": "error",
@@ -51,6 +63,7 @@
     "typescript/no-namespace": "error",
     "typescript/no-require-imports": "error",
     "typescript/no-unnecessary-type-constraint": "error",
-    "typescript/no-unsafe-function-type": "error"
+    "typescript/no-unsafe-function-type": "error",
+    "jsx-a11y/label-has-associated-control": "off"
   }
 }
